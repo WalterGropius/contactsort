@@ -72,7 +72,8 @@ export function ImportDialog({
             <div className="import-file">
               <strong title={f.name}>{f.name}</strong>
               <span className="muted small">
-                {f.cards.length} contacts{f.hasLists ? ' · includes saved lists' : ''}
+                {f.cards.length} {f.cards.length === 1 ? 'contact' : 'contacts'}
+                {f.hasLists ? ' · includes saved lists' : ''}
               </span>
             </div>
             <input

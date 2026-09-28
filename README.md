@@ -51,9 +51,19 @@ Requires Node 22.12 or newer.
    | `Z` / `Backspace` | undo                                     |
    | `L`               | open/close lists                         |
 
-5. **Export → Save progress (.vcf)** whenever you like. Tomorrow, drop that file back in and carry on. The browser
-   also autosaves (IndexedDB, this computer only), so an accidental refresh doesn't lose anything. The exported file
-   is still the real save.
+5. **Export** whenever you like. The Export menu has two modes (the choice is remembered):
+
+   | Mode               | You get                                                                                           | To continue tomorrow                                              |
+   | ------------------ | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+   | **Progress file**  | One `.vcf` with every contact. Each sorted contact carries an `X-CUSTOM-LISTS` line (see below).   | Drop that one file back in.                                       |
+   | **Separate lists** | One plain `.vcf` per list, named after it: 5 lists → 5 files. Cards are exactly as imported, with nothing added. | Drop the list files back in **together with the original export**. |
+
+   In *Separate lists* mode, Chrome and Edge ask for a folder once and write every file into it. Other browsers
+   download the files one by one, and there's also a one-`.zip` option. Empty lists get no file, and unsorted
+   contacts aren't exported. A contact filed in two lists appears in both files.
+
+   The browser also autosaves (IndexedDB, this computer only), so an accidental refresh doesn't lose anything. The
+   exported files are still the real save.
 
 ### Bringing existing lists in
 
@@ -64,8 +74,8 @@ that appear in several files are merged, not duplicated.
 
 ### Getting the lists back into a contacts app
 
-vCard has no standard way to carry Apple's lists, so use **Export → One file per list (.zip)**. It gives one `.vcf`
-per list plus `_Unsorted.vcf`. Then, per file:
+vCard has no standard way to carry Apple's lists, so use **Export → Separate lists**. It gives one plain `.vcf`
+per list. Then, per file:
 
 - **Google Contacts:** Import → choose the file → *Import and add to label*.
 - **Mac Contacts:** create the list in the sidebar and drag that list's `.vcf` onto it. If you're asked about
@@ -75,7 +85,10 @@ Keep the original export as a backup and try a small list first.
 
 ## File format
 
-The "save progress" export is the original vCard, byte for byte, with at most three kinds of added lines:
+*Separate lists* files are plain vCards: each card is byte for byte what was imported, and any ContactSort lines
+are stripped. The rest of this section is about the *Progress file*.
+
+The progress export is the original vCard, byte for byte, with at most three kinds of added lines:
 
 ```
 BEGIN:VCARD

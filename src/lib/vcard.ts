@@ -511,6 +511,16 @@ export function serializeCard(card: ParsedCard, lists: string[], listOrder?: str
   return out.join('\r\n') + '\r\n';
 }
 
+/** The card exactly as it came in, minus any ContactSort lines: nothing added. */
+export function serializeClean(card: ParsedCard): string {
+  return (
+    card.lines
+      .filter((l) => l.name !== LISTS_PROP && l.name !== LIST_ORDER_PROP)
+      .map((l) => l.raw)
+      .join('\r\n') + '\r\n'
+  );
+}
+
 export function serializeCards(entries: { card: ParsedCard; lists: string[] }[], listOrder?: string[]): string {
   return entries.map(({ card, lists }, i) => serializeCard(card, lists, i === 0 ? listOrder : undefined)).join('');
 }

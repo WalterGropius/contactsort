@@ -47,7 +47,7 @@ export async function loadSaved(): Promise<Session | null> {
     const s = state?.result;
     const c = contacts?.result;
     if (!s || !Array.isArray(c) || c.length === 0) return null;
-    return { ...s, contacts: c, history: s.history ?? [] };
+    return { ...s, contacts: c, history: s.history ?? [], exportMode: s.exportMode ?? 'progress' };
   } catch {
     return null;
   }

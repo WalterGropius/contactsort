@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSession, exportAll, exportListsZip, readImportFile, reducer, type Session } from './session';
+import { buildSession, exportAll, exportListsZip, listFiles, readImportFile, reducer, type Session } from './session';
 import { parseVcf } from './vcard';
 import { SAMPLE_VCF } from './sample';
 
@@ -88,7 +88,7 @@ describe('session', () => {
     const text = new TextDecoder().decode(zip);
     expect(text).toContain('A_B.vcf');
     expect(text).toContain('C.vcf');
-    expect(text).toContain('_Unsorted.vcf');
+    expect(text).not.toContain('Unsorted');
     expect(new DataView(zip.buffer).getUint32(zip.length - 22, true)).toBe(0x06054b50);
   });
 });
@@ -112,5 +112,61 @@ describe('list definitions', () => {
   it('does not put list definitions into per-list exports', () => {
     const s = start(card('Ann', 'X-CUSTOM-LISTS:A\r\n'));
     expect(new TextDecoder().decode(exportListsZip(s))).not.toContain('X-CONTACTSORT-LISTS');
+  });
+});
+
+describe('separate lists export', () => {
+  const original = SAMPLE_VCF;
+
+  function sorted(): Session {
+    let s = start(original);
+    for (const name of ['Family', 'Friends', 'Work', 'Clients', 'Delete']) s = reducer(s, { type: 'addList', name });
+    // 7 contacts over the 5 lists
+    [0, 0, 1, 2, 2, 3, 4].forEach((li) => {
+      s = reducer(s, { type: 'assign', uid: s.queue[0], listId: s.lists[li].id, exit: { x: 0, y: 0 } });
+    });
+    return s;
+  }
+
+  it('gives one file per list: 5 lists → 5 vcfs, named after the lists', () => {
+    const files = listFiles(sorted());
+    expect(files.map((f) => f.name)).toEqual(['Family.vcf', 'Friends.vcf', 'Work.vcf', 'Clients.vcf', 'Delete.vcf']);
+    expect(files.map((f) => parseVcf(f.data).length)).toEqual([2, 1, 2, 1, 1]);
+  });
+
+  it('writes the cards exactly as imported: no X- lines, no added UID', () => {
+    const originalCards = new Set(original.split(/(?<=END:VCARD\r\n)/));
+    for (const f of listFiles(sorted())) {
+      expect(f.data).not.toMatch(/X-CUSTOM-LISTS|X-CONTACTSORT-LISTS|^UID:/m);
+      for (const c of f.data.split(/(?<=END:VCARD\r\n)/)) expect(originalCards.has(c)).toBe(true);
+    }
+  });
+
+  it('strips ContactSort lines when the input was a progress file', () => {
+    const s = start(card('Ann', 'X-CUSTOM-LISTS:Work\r\n'));
+    const resumed = start(exportAll(s)); // now carries UID + X- lines
+    const [f] = listFiles(resumed);
+    expect(f.data).not.toContain('X-');
+    expect(f.data).toContain('UID:'); // the UID it had in the file is kept
+  });
+
+  it('skips empty lists', () => {
+    let s = start(card('Ann') + card('Bob'));
+    s = reducer(s, { type: 'addList', name: 'Used' });
+    s = reducer(s, { type: 'addList', name: 'Empty' });
+    s = reducer(s, { type: 'assign', uid: s.queue[0], listId: s.lists[0].id, exit: { x: 0, y: 0 } });
+    expect(listFiles(s).map((f) => f.name)).toEqual(['Used.vcf']);
+  });
+
+  it('can continue tomorrow from the original export + the list files', () => {
+    const before = sorted();
+    const files = listFiles(before);
+    const resumed = buildSession([
+      { file: readImportFile('All.vcf', original), addToList: '' },
+      ...files.map((f) => ({ file: readImportFile(f.name, f.data), addToList: f.name.replace(/\.vcf$/, '') })),
+    ]);
+    expect(resumed.contacts.length).toBe(before.contacts.length);
+    expect(resumed.queue).toEqual(before.queue);
+    expect(resumed.lists.map((l) => l.name)).toEqual(['Family', 'Friends', 'Work', 'Clients', 'Delete']);
   });
 });

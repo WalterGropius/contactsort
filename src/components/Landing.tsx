@@ -164,16 +164,21 @@ export function Landing({ saved, onFiles, onResume, onDiscard, onSample }: Props
           <details>
             <summary>How do I continue tomorrow?</summary>
             <p>
-              Hit <b>Export → Save progress</b> any time. That .vcf holds every contact plus a{' '}
+              Export any time. With <b>Progress file</b> you get one .vcf that holds every contact plus an{' '}
               <code>X-CUSTOM-LISTS</code> line with its lists. Drop it here next time: lists come back, and contacts
-              you already sorted stay out of the stack. The browser also autosaves, so an accidental refresh won’t lose
-              anything.
+              you already sorted stay out of the stack.
             </p>
+            <p>
+              With <b>Separate lists</b> you get one plain .vcf per list and nothing is added to the cards. To continue,
+              drop those files here together with your original export. Each file becomes its list again.
+            </p>
+            <p>The browser also autosaves, so an accidental refresh won’t lose anything.</p>
           </details>
           <details>
             <summary>How do I get the lists back into my contacts app?</summary>
             <p>
-              A single .vcf can’t carry Apple’s lists, so use <b>Export → One file per list</b>. Then, for each file:
+              A single .vcf can’t carry Apple’s lists, so choose <b>Export → Separate lists</b>. That gives one plain
+              .vcf per list (5 lists → 5 files). Then, for each file:
             </p>
             <ul>
               <li>

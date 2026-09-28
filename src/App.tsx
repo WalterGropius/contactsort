@@ -13,7 +13,7 @@ import {
 } from './components/icons';
 import { Landing } from './components/Landing';
 import { ListsDrawer } from './components/ListsDrawer';
-import { dateStamp, downloadFile } from './lib/download';
+import { dateStamp, downloadFile, saveFiles } from './lib/download';
 import { SAMPLE_VCF } from './lib/sample';
 import {
   buildSession,
@@ -22,10 +22,12 @@ import {
   exportList,
   exportListsZip,
   isSorted,
+  listFiles,
   readImportFile,
   reducer,
   safeFileName,
   type Action,
+  type ExportMode,
   type ImportFile,
   type ImportPlanItem,
   type ListDef,
@@ -47,6 +49,16 @@ function wheelRing(lists: ListDef[]): string {
   const from = wheelOffset(lists.length) + 90 - step / 2;
   const stops = lists.map((l, i) => `${l.color} ${i * step}deg ${(i + 1) * step}deg`).join(', ');
   return `conic-gradient(from ${from}deg, ${stops})`;
+}
+
+const MODE_KEY = 'contactsort.exportMode';
+
+function preferredMode(): ExportMode {
+  try {
+    return localStorage.getItem(MODE_KEY) === 'lists' ? 'lists' : 'progress';
+  } catch {
+    return 'progress';
+  }
 }
 
 interface Toast {
@@ -120,7 +132,7 @@ export default function App() {
     const bad = parsed.filter((p) => p.cards.length === 0);
     if (bad.length) showToast(`No contacts found in ${bad.map((b) => b.name).join(', ')}`, true);
     if (!good.length) return;
-    if (!session && good.length === 1) start(buildSession([{ file: good[0], addToList: '' }]));
+    if (!session && good.length === 1) start(buildSession([{ file: good[0], addToList: '' }], undefined, preferredMode()));
     else setPending(good);
   };
   const handleFilesRef = useRef(handleFiles);
@@ -128,7 +140,7 @@ export default function App() {
 
   const confirmImport = (items: ImportPlanItem[], merge: boolean) => {
     setPending(null);
-    start(buildSession(items, merge && session ? session : undefined));
+    start(buildSession(items, merge && session ? session : undefined, preferredMode()));
   };
 
   // Files can be dropped anywhere on the window.
@@ -211,17 +223,48 @@ export default function App() {
     const sorted = session.contacts.filter((c) => isSorted(session, c.uid)).length;
     showToast(`Saved ${session.contacts.length} contacts (${sorted} sorted). Load this file next time to continue.`);
   };
+  const setExportMode = (mode: ExportMode) => {
+    dispatch({ type: 'setExportMode', mode });
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      /* preference just isn't remembered */
+    }
+  };
+
+  /** Toast suffix naming lists that got no file because they're empty. */
+  const emptyNote = (s: Session) => {
+    const empty = s.lists.filter((l) => !s.contacts.some((c) => s.assignments[c.uid]?.includes(l.id)));
+    return empty.length ? ` (${empty.map((l) => l.name).join(', ')} ${empty.length === 1 ? 'is' : 'are'} empty)` : '';
+  };
+
+  /** "Separate lists" mode: one plain .vcf per list, nothing added to the cards. */
+  const exportLists = async () => {
+    if (!session) return;
+    setMenu(null);
+    const files = listFiles(session);
+    if (!files.length) return showToast('Sort a few contacts into lists first', true);
+    const how = await saveFiles(files, 'text/vcard;charset=utf-8');
+    if (how === 'cancelled') return;
+    dispatch({ type: 'exported' });
+    const n = `${files.length} list ${files.length === 1 ? 'file' : 'files'}`;
+    showToast(`${how === 'folder' ? `Saved ${n} to the folder you picked` : `Downloaded ${n}`}${emptyNote(session)}`);
+  };
   const exportZip = () => {
     if (!session) return;
-    downloadFile(`contact-lists-${dateStamp()}.zip`, exportListsZip(session), 'application/zip');
+    const files = listFiles(session);
     setMenu(null);
-    showToast(`Exported ${session.lists.length} lists as separate .vcf files`);
+    if (!files.length) return showToast('Sort a few contacts into lists first', true);
+    downloadFile(`contact-lists-${dateStamp()}.zip`, exportListsZip(session), 'application/zip');
+    dispatch({ type: 'exported' });
+    showToast(`Downloaded ${files.length} list ${files.length === 1 ? 'file' : 'files'} as one .zip${emptyNote(session)}`);
   };
   const exportOne = (listId: string) => {
     if (!session) return;
     const list = session.lists.find((l) => l.id === listId);
     if (!list) return;
-    downloadFile(`${safeFileName(list.name)}.vcf`, exportList(session, listId), 'text/vcard;charset=utf-8');
+    const clean = session.exportMode === 'lists';
+    downloadFile(`${safeFileName(list.name)}.vcf`, exportList(session, listId, clean), 'text/vcard;charset=utf-8');
   };
 
   const startOver = async () => {
@@ -248,7 +291,11 @@ export default function App() {
             await clearSaved();
             setSaved(null);
           }}
-          onSample={() => start(buildSession([{ file: readImportFile('Sample contacts.vcf', SAMPLE_VCF), addToList: '' }]))}
+          onSample={() =>
+            start(
+              buildSession([{ file: readImportFile('Sample contacts.vcf', SAMPLE_VCF), addToList: '' }], undefined, preferredMode()),
+            )
+          }
         />
         {pending && (
           <ImportDialog files={pending} canMerge={false} dirty={false} onCancel={() => setPending(null)} onConfirm={confirmImport} />
@@ -258,8 +305,9 @@ export default function App() {
     );
   }
 
-  const { lists, queue, contacts, assignments, history } = session;
+  const { lists, queue, contacts, assignments, history, exportMode } = session;
   const counts = countByList(session);
+  const listFileCount = lists.filter((l) => (counts[l.id] ?? 0) > 0).length;
   const sortedCount = contacts.filter((c) => isSorted(session, c.uid)).length;
   const pct = contacts.length ? (sortedCount / contacts.length) * 100 : 0;
   const listsById = new Map(lists.map((l) => [l.id, l]));
@@ -308,14 +356,55 @@ export default function App() {
             </button>
             {menu === 'export' && (
               <div className="menu">
-                <button className="menu-item" onClick={exportProgress}>
-                  <strong>Save progress (.vcf)</strong>
-                  <span>All {contacts.length} contacts with their lists. Load it next time to continue where you left off.</span>
-                </button>
-                <button className="menu-item" onClick={exportZip} disabled={sortedCount === 0}>
-                  <strong>One file per list (.zip)</strong>
-                  <span>A separate .vcf for each list, for importing into Apple or Google Contacts list by list.</span>
-                </button>
+                <div className="menu-label">Export as</div>
+                <div className="segmented" role="radiogroup" aria-label="Export as">
+                  <button
+                    role="radio"
+                    aria-checked={exportMode === 'progress'}
+                    className={exportMode === 'progress' ? 'is-on' : ''}
+                    onClick={() => setExportMode('progress')}
+                  >
+                    Progress file
+                  </button>
+                  <button
+                    role="radio"
+                    aria-checked={exportMode === 'lists'}
+                    className={exportMode === 'lists' ? 'is-on' : ''}
+                    onClick={() => setExportMode('lists')}
+                  >
+                    Separate lists
+                  </button>
+                </div>
+                {exportMode === 'progress' ? (
+                  <button className="menu-item" onClick={exportProgress}>
+                    <strong>Save progress (.vcf)</strong>
+                    <span>
+                      One file with all {contacts.length} contacts; each contact’s lists are kept in an X-CUSTOM-LISTS
+                      line. Load it next time to continue where you left off.
+                    </span>
+                  </button>
+                ) : (
+                  <>
+                    <button className="menu-item" onClick={exportLists} disabled={listFileCount === 0}>
+                      <strong>
+                        Export {listFileCount} {listFileCount === 1 ? 'list' : 'lists'} as {listFileCount} .vcf{' '}
+                        {listFileCount === 1 ? 'file' : 'files'}
+                      </strong>
+                      <span>
+                        One plain file per list, named after it. Cards stay exactly as imported, with nothing added,
+                        ready for Apple or Google Contacts.
+                      </span>
+                    </button>
+                    <button className="menu-item" onClick={exportZip} disabled={listFileCount === 0}>
+                      <strong>Same, as one .zip</strong>
+                      <span>If your browser only lets you download one file at a time.</span>
+                    </button>
+                    <p className="menu-note">
+                      To continue later, drop these files back in together with your original export. Unsorted
+                      contacts aren’t exported.
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -382,12 +471,20 @@ export default function App() {
               Export now to keep the result.
             </p>
             <div className="done-actions">
-              <button className="btn primary" onClick={exportProgress}>
-                <DownloadIcon size={18} /> Save progress (.vcf)
-              </button>
-              <button className="btn" onClick={exportZip} disabled={sortedCount === 0}>
-                One file per list (.zip)
-              </button>
+              {exportMode === 'progress' ? (
+                <button className="btn primary" onClick={exportProgress}>
+                  <DownloadIcon size={18} /> Save progress (.vcf)
+                </button>
+              ) : (
+                <>
+                  <button className="btn primary" onClick={exportLists} disabled={listFileCount === 0}>
+                    <DownloadIcon size={18} /> Export {listFileCount} list {listFileCount === 1 ? 'file' : 'files'}
+                  </button>
+                  <button className="btn" onClick={exportZip} disabled={listFileCount === 0}>
+                    As one .zip
+                  </button>
+                </>
+              )}
             </div>
             <button className="btn link" onClick={() => dispatch({ type: 'setIncludeSorted', value: true })}>
               Go through sorted contacts again

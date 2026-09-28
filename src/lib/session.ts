@@ -1,4 +1,4 @@
-import { parseVcf, serializeCard, type ParsedCard } from './vcard';
+import { parseVcf, serializeCard, serializeClean, type ParsedCard } from './vcard';
 import { createZip } from './zip';
 
 export const PALETTE = [
@@ -31,6 +31,12 @@ export interface Vec {
   y: number;
 }
 
+/**
+ * progress: one .vcf with every contact, lists kept in X-CUSTOM-LISTS
+ * lists:    one plain .vcf per list, cards exactly as imported (nothing added)
+ */
+export type ExportMode = 'progress' | 'lists';
+
 export interface Session {
   sources: string[];
   contacts: ParsedCard[];
@@ -40,6 +46,7 @@ export interface Session {
   /** uids still to swipe, top of the stack first */
   queue: string[];
   includeSorted: boolean;
+  exportMode: ExportMode;
   /** true when there are changes that haven't been exported yet */
   dirty: boolean;
   history: HistoryEntry[];
@@ -94,7 +101,7 @@ export interface ImportPlanItem {
  * importing the same contact twice never creates a duplicate — its lists are
  * merged instead.
  */
-export function buildSession(items: ImportPlanItem[], base?: Session): Session {
+export function buildSession(items: ImportPlanItem[], base?: Session, exportMode: ExportMode = 'progress'): Session {
   const lists = base ? base.lists.map((l) => ({ ...l })) : [];
   const assignments: Record<string, string[]> = base ? { ...base.assignments } : {};
   const contacts = base ? [...base.contacts] : [];
@@ -148,6 +155,7 @@ export function buildSession(items: ImportPlanItem[], base?: Session): Session {
     assignments,
     queue,
     includeSorted,
+    exportMode: base?.exportMode ?? exportMode,
     // A merge, or lists taken from file names, is new information worth exporting.
     dirty: Boolean(base) || items.some((i) => i.addToList.trim() !== ''),
     history: [],
@@ -169,6 +177,7 @@ export type Action =
   | { type: 'moveList'; id: string; delta: number }
   | { type: 'deleteList'; id: string }
   | { type: 'setIncludeSorted'; value: boolean }
+  | { type: 'setExportMode'; mode: ExportMode }
   | { type: 'exported' };
 
 /** Non-empty, not reserved ("Unsorted"), and not already taken by another list. */
@@ -278,6 +287,8 @@ export function reducer(s: Session, a: Action): Session {
       }
       return { ...s, includeSorted: a.value, queue, history: [] };
     }
+    case 'setExportMode':
+      return { ...s, exportMode: a.mode };
     case 'exported':
       return { ...s, dirty: false };
   }
@@ -301,10 +312,11 @@ export function exportAll(s: Session): string {
   return s.contacts.map((c, i) => serializeCard(c, listNamesFor(s, c.uid), i === 0 ? order : undefined)).join('');
 }
 
-export function exportList(s: Session, listId: string): string {
+/** One list's contacts. `clean` writes the cards exactly as imported. */
+export function exportList(s: Session, listId: string, clean = false): string {
   return s.contacts
     .filter((c) => s.assignments[c.uid]?.includes(listId))
-    .map((c) => serializeCard(c, listNamesFor(s, c.uid)))
+    .map((c) => (clean ? serializeClean(c) : serializeCard(c, listNamesFor(s, c.uid))))
     .join('');
 }
 
@@ -312,24 +324,31 @@ export function safeFileName(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim() || 'list';
 }
 
-/** One .vcf per list (plus the unsorted rest), zipped. */
-export function exportListsZip(s: Session): Uint8Array {
+export interface ExportFile {
+  name: string;
+  data: string;
+}
+
+/**
+ * "Separate lists" export: one plain .vcf per non-empty list, named after the
+ * list (5 lists → 5 files). Nothing is added to the cards, so they import
+ * cleanly anywhere; a contact in two lists appears in both files.
+ */
+export function listFiles(s: Session): ExportFile[] {
   const used = new Set<string>();
-  const entries = s.lists
-    .map((l) => {
-      let base = safeFileName(l.name);
-      let n = 2;
-      while (used.has(base.toLowerCase())) base = `${safeFileName(l.name)} (${n++})`;
+  return s.lists
+    .map((l) => ({ list: l, data: exportList(s, l.id, true) }))
+    .filter((e) => e.data.length > 0)
+    .map(({ list, data }) => {
+      let base = safeFileName(list.name);
+      for (let n = 2; used.has(base.toLowerCase()); n++) base = `${safeFileName(list.name)} (${n})`;
       used.add(base.toLowerCase());
-      return { name: `${base}.vcf`, data: exportList(s, l.id) };
-    })
-    .filter((e) => e.data.length > 0);
-  const unsorted = s.contacts
-    .filter((c) => !isSorted(s, c.uid))
-    .map((c) => serializeCard(c, []))
-    .join('');
-  if (unsorted) entries.push({ name: '_Unsorted.vcf', data: unsorted });
-  return createZip(entries);
+      return { name: `${base}.vcf`, data };
+    });
+}
+
+export function exportListsZip(s: Session): Uint8Array {
+  return createZip(listFiles(s));
 }
 
 export function countByList(s: Session): Record<string, number> {
